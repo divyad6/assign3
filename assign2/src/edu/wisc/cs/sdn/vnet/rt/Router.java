@@ -45,7 +45,7 @@ public class Router extends Device
             int network = iface.getIpAddress() & iface.getSubnetMask();
             ripTable.put(network, new RipEntry(network, iface.getSubnetMask(), 0, 0));
             routeTable.insert(network, 0, iface.getSubnetMask(), iface);
-            sendRIPPacket(RIPv2.COMMAND_REQUEST, iface);
+            sendRIPPacket(null, RIPv2.COMMAND_REQUEST, iface);
         }
 
         Timer timer = new Timer(true);
@@ -58,9 +58,9 @@ public class Router extends Device
     }
 
 	// process a received RIP packet
-	private void processRIPPacket(RIPv2 rip, int sourceIP, Iface inIface) {
+	private void processRIPPacket(Ethernet etherPacket, RIPv2 rip, int sourceIP, Iface inIface) {
         if (rip.getCommand() == RIPv2.COMMAND_REQUEST) {
-            sendRIPPacket((byte) RIPv2.COMMAND_RESPONSE, inIface);
+            sendRIPPacket(etherPacket, (byte) RIPv2.COMMAND_RESPONSE, inIface);
         } else if (rip.getCommand() == RIPv2.COMMAND_RESPONSE) {
             for (RIPv2Entry entry : rip.getEntries()) {
                 int network = entry.getAddress() & entry.getSubnetMask();
@@ -167,7 +167,7 @@ public class Router extends Device
             UDP udp = (UDP) ipHeader.getPayload();
             if (udp.getDestinationPort() == UDP.RIP_PORT) {
                 RIPv2 rip = (RIPv2) udp.getPayload();
-                processRIPPacket(rip, ipHeader.getSourceAddress(), inIface);
+                processRIPPacket(etherPacket, rip, ipHeader.getSourceAddress(), inIface);
                 return;
             }
         }
@@ -229,7 +229,7 @@ public class Router extends Device
 	}
 
 	// send RIP packet with the specified command type
-	private void sendRIPPacket(int command, Iface outIface) {
+	private void sendRIPPacket(Ethernet etherPacket, int command, Iface outIface) {
         Ethernet ether = new Ethernet();
         ether.setSourceMACAddress(outIface.getMacAddress().toBytes());
 		// ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
@@ -253,7 +253,7 @@ public class Router extends Device
 			ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
 			ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 		} else if ((byte)command == RIPv2.COMMAND_RESPONSE) {
-			IPv4 ipPacket = (IPv4)ethernetPacket.getPayload();
+			IPv4 ipPacket = (IPv4)etherPacket.getPayload();
 			rip.setCommand(RIPv2.COMMAND_RESPONSE);
 			ether.setDestinationMACAddress(ether.getSourceMACAddress());
 			ip.setDestinationAddress(ipPacket.getSourceAddress());
@@ -280,7 +280,7 @@ public class Router extends Device
 	// broadcast RIP responses periodically
 	private void broadcastRIPResponses() {
         for (Iface iface : interfaces.values()) {
-            sendRIPPacket(RIPv2.COMMAND_RESPONSE, iface);
+            sendRIPPacket(null, RIPv2.COMMAND_RESPONSE, iface);
         }
     }
 
