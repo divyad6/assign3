@@ -247,25 +247,31 @@ public class Router extends Device
         udp.setDestinationPort(UDP.RIP_PORT);
 
         RIPv2 rip = new RIPv2();
-        // rip.setCommand((byte)command);
-        // for (RipEntry entry : ripTable.values()) {
-        //     rip.addEntry(new RIPv2Entry(entry.address, entry.mask, 0, entry.metric));
-        // }
 
-        ether.setPayload(ip);
-        ip.setPayload(udp);
-        udp.setPayload(rip);
-        sendPacket(ether, outIface);
-
-		if (command == RIPv2.COMMAND_REQUEST) {
+		if ((byte)command == RIPv2.COMMAND_REQUEST) {
 			rip.setCommand(RIPv2.COMMAND_REQUEST);
 			ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
 			ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
-		} else {
+		} else if ((byte)command == RIPv2.COMMAND_RESPONSE) {
 			rip.setCommand(RIPv2.COMMAND_RESPONSE);
 			ether.setDestinationMACAddress(ether.getSourceMACAddress());
 			ip.setDestinationAddress(ipPacket.getSourceAddress());
 		}
+
+		List<RIPv2Entry> entries = new ArrayList<RIPv2Entry>();
+		synchronized(this.ripTable);
+        for (RipEntry localEntry : ripTable.values()) {
+            // rip.addEntry(new RIPv2Entry(entry.address, entry.mask, 0, entry.metric));
+			RIPv2Entry entry = new RIPv2Entry(localEntry.address, localEntry.mask, localEntry.metric);
+			entries.add(entry);
+        }
+
+		ether.setPayload(ip);
+        ip.setPayload(udp);
+        udp.setPayload(rip);
+		rip.setEntries(entries);
+
+        sendPacket(ether, outIface);
     }
 
 	// broadcast RIP responses periodically
