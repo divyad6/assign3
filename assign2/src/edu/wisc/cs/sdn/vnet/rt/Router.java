@@ -238,6 +238,7 @@ public class Router extends Device
         ip.setTtl((byte) 64);
         ip.setProtocol(IPv4.PROTOCOL_UDP);
         ip.setSourceAddress(outIface.getIpAddress());
+		ip.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
         ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 
         UDP udp = new UDP();
