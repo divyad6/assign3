@@ -231,7 +231,8 @@ public class Router extends Device
 	// send RIP packet with the specified command type
 	private void sendRIPPacket(int command, Iface outIface) {
         Ethernet ether = new Ethernet();
-        ether.setSourceMACAddress(outIface.getMacAddress().toBytes());
+        ether.setSourceMACAddress("ff:ff:ff:ff:ff:ff");
+		// ether.setDestinationMACAddress("")
         ether.setEtherType(Ethernet.TYPE_IPv4);
 
         IPv4 ip = new IPv4();
