@@ -259,12 +259,14 @@ public class Router extends Device
 		}
 
 		List<RIPv2Entry> entries = new ArrayList<RIPv2Entry>();
-		synchronized(this.ripTable);
-        for (RipEntry localEntry : ripTable.values()) {
+		synchronized(this.ripTable)
+        {
+			for (RipEntry localEntry : ripTable.values()) {
             // rip.addEntry(new RIPv2Entry(entry.address, entry.mask, 0, entry.metric));
 			RIPv2Entry entry = new RIPv2Entry(localEntry.address, localEntry.mask, localEntry.metric);
 			entries.add(entry);
-        }
+        	}
+		}
 
 		ether.setPayload(ip);
         ip.setPayload(udp);
