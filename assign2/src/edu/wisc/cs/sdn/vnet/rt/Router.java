@@ -232,14 +232,14 @@ public class Router extends Device
 	private void sendRIPPacket(int command, Iface outIface) {
         Ethernet ether = new Ethernet();
         ether.setSourceMACAddress("ff:ff:ff:ff:ff:ff");
-		// ether.setDestinationMACAddress("")
+		ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
         ether.setEtherType(Ethernet.TYPE_IPv4);
 
         IPv4 ip = new IPv4();
         ip.setTtl((byte) 64);
         ip.setProtocol(IPv4.PROTOCOL_UDP);
         ip.setSourceAddress(outIface.getIpAddress());
-		ip.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
+		// ip.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
         ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 
         UDP udp = new UDP();
