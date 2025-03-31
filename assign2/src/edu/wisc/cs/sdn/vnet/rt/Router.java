@@ -253,6 +253,7 @@ public class Router extends Device
 			ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
 			ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 		} else if ((byte)command == RIPv2.COMMAND_RESPONSE) {
+			IPv4 ipPacket = (IPv4)ethernetPacket.getPayload();
 			rip.setCommand(RIPv2.COMMAND_RESPONSE);
 			ether.setDestinationMACAddress(ether.getSourceMACAddress());
 			ip.setDestinationAddress(ipPacket.getSourceAddress());
