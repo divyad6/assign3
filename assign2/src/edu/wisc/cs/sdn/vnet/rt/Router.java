@@ -232,7 +232,7 @@ public class Router extends Device
 	private void sendRIPPacket(int command, Iface outIface) {
         Ethernet ether = new Ethernet();
         ether.setSourceMACAddress(outIface.getMacAddress().toBytes());
-		ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
+		// ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
         ether.setEtherType(Ethernet.TYPE_IPv4);
 
         IPv4 ip = new IPv4();
@@ -240,22 +240,32 @@ public class Router extends Device
         ip.setProtocol(IPv4.PROTOCOL_UDP);
         ip.setSourceAddress(outIface.getIpAddress());
 		// ip.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
-        ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
+        // ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 
         UDP udp = new UDP();
         udp.setSourcePort(UDP.RIP_PORT);
         udp.setDestinationPort(UDP.RIP_PORT);
 
         RIPv2 rip = new RIPv2();
-        rip.setCommand((byte)command);
-        for (RipEntry entry : ripTable.values()) {
-            rip.addEntry(new RIPv2Entry(entry.address, entry.mask, entry.metric));
-        }
+        // rip.setCommand((byte)command);
+        // for (RipEntry entry : ripTable.values()) {
+        //     rip.addEntry(new RIPv2Entry(entry.address, entry.mask, 0, entry.metric));
+        // }
 
         ether.setPayload(ip);
         ip.setPayload(udp);
         udp.setPayload(rip);
         sendPacket(ether, outIface);
+
+		if (command == RIPv2.COMMAND_REQUEST) {
+			rip.setCommand(RIPv2.COMMAND_REQUEST);
+			ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
+			ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
+		} else {
+			rip.setCommand(RIPv2.COMMAND_RESPONSE);
+			ether.setDestinationMACAddress(ether.getSourceMACAddress());
+			ip.setDestinationAddress(ipPacket.getSourceAddress());
+		}
     }
 
 	// broadcast RIP responses periodically
