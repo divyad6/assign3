@@ -9,9 +9,6 @@ import net.floodlightcontroller.packet.IPv4;
 import net.floodlightcontroller.packet.UDP;
 import net.floodlightcontroller.packet.RIPv2;
 import net.floodlightcontroller.packet.RIPv2Entry;
-import net.floodlightcontroller.packet.MACAddress;
-import net.floodlightcontroller.packet.ArpRequest;
-import net.floodlightcontroller.packet.ARP;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
