@@ -42,6 +42,7 @@ public class Router extends Device
 	// initialize RIP routing
 	public void initializeRIP() {
         for (Iface iface : this.interfaces.values()) {
+			System.out.println("Initializing RIP on interface: " + iface.getName());
             int network = iface.getIpAddress() & iface.getSubnetMask();
             ripTable.put(network, new RipEntry(network, iface.getSubnetMask(), 0, 0));
             routeTable.insert(network, 0, iface.getSubnetMask(), iface);
@@ -59,6 +60,7 @@ public class Router extends Device
 
 	// process a received RIP packet
 	private void processRIPPacket(Ethernet etherPacket, RIPv2 rip, int sourceIP, Iface inIface) {
+		System.out.println("Processing RIP packet: " + rip.toString());
         if (rip.getCommand() == RIPv2.COMMAND_REQUEST) {
             sendRIPPacket(etherPacket, (byte) RIPv2.COMMAND_RESPONSE, inIface);
         } else if (rip.getCommand() == RIPv2.COMMAND_RESPONSE) {
@@ -217,6 +219,7 @@ public class Router extends Device
 		int nextHop = (route.getGatewayAddress() != 0) ? route.getGatewayAddress() : ipHeader.getDestinationAddress();
 		ArpEntry arpEntry = arpCache.lookup(nextHop);
     		if (arpEntry == null) {
+				System.err.println("Error: ARP entry not found for next hop " + nextHop);
         		return;
     		}
 
@@ -230,6 +233,11 @@ public class Router extends Device
 
 	// send RIP packet with the specified command type
 	private void sendRIPPacket(Ethernet etherPacket, int command, Iface outIface) {
+
+		if (outIface == null) {
+			System.err.println("Error: Output interface is null.");
+			return;
+    	}
         Ethernet ether = new Ethernet();
         ether.setSourceMACAddress(outIface.getMacAddress().toBytes());
 		// ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
