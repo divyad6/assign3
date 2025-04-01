@@ -9,6 +9,9 @@ import net.floodlightcontroller.packet.IPv4;
 import net.floodlightcontroller.packet.UDP;
 import net.floodlightcontroller.packet.RIPv2;
 import net.floodlightcontroller.packet.RIPv2Entry;
+import net.floodlightcontroller.packet.MACAddress;
+import net.floodlightcontroller.packet.ArpRequest;
+import net.floodlightcontroller.packet.ARP;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
@@ -28,16 +31,23 @@ public class Router extends Device
 	/** ARP cache for the router */
 	private ArpCache arpCache;
 
+	// rip table for dynamic routing data
+	private Map<Integer, RipRecord> ripEntries;
+
+	// constants for rip, arp, etc.
+	private static final String MAC_BCAST    = "ff:ff:ff:ff:ff:ff";
+	private static final String MAC_ZERO     = "00:00:00:00:00:00";
+	private static final String IP_RIP_GROUP = "224.0.0.9";
+
 	/**
-	 * Creates a router for a specific host.
+	 * creates a router for a specific host.
 	 * @param host hostname for the router
 	 */
 	public Router(String host, DumpFile logfile)
 	{
 		super(host, logfile);
 		this.routeTable = new RouteTable();
-		this.arpCache = new ArpCache();
-
+		this.arpCache   = new ArpCache();
 		this.ripEntries = new ConcurrentHashMap<>();
 	}
 	
@@ -50,7 +60,7 @@ public class Router extends Device
 	}
 	
 	/**
-	 * Load a new routing table from a file.
+	 * load a new routing table from a file.
 	 * @param routeTableFile the name of the file containing the routing table
 	 */
 	public void loadRouteTable(String routeTableFile)
@@ -69,8 +79,8 @@ public class Router extends Device
 	}
 	
 	/**
-	 * Load a new ARP cache from a file.
-	 * @param arpCacheFile the name of the file containing the ARP cache
+	 * load a new arp cache from a file.
+	 * @param arpCacheFile the name of the file containing the arp cache
 	 */
 	public void loadArpCache(String arpCacheFile)
 	{
@@ -88,8 +98,8 @@ public class Router extends Device
 	}
 
 	/**
-	 * Handle an Ethernet packet received on a specific interface.
-	 * @param etherPacket the Ethernet packet that was received
+	 * handle an ethernet packet received on a specific interface.
+	 * @param etherPacket the ethernet packet that was received
 	 * @param inIface the interface on which the packet was received
 	 */
 	public void handlePacket(Ethernet etherPacket, Iface inIface)
@@ -99,323 +109,346 @@ public class Router extends Device
 		
 		/********************************************************************/
 		/* TODO: Handle packets                                             */
-		short etherType = etherPacket.getEtherType();
-
-		if (etherType == Ethernet.TYPE_IPv4)
+		/********************************************************************/
+		
+		// check if ipv4
+		if (etherPacket.getEtherType() == Ethernet.TYPE_IPv4)
 		{
-			IPv4 ipv4Data = (IPv4) etherPacket.getPayload();
+			IPv4 ipPayload = (IPv4) etherPacket.getPayload();
 
-			// check if it's potentially RIP packet
-			if (ipv4Data.getDestinationAddress() == IPv4.toIPv4Address(IP_RIP_GROUP) 
-					&& ipv4Data.getProtocol() == IPv4.PROTOCOL_UDP)
+			// check if packet is destined to rip multicast with udp/rip port
+			if (ipPayload.getDestinationAddress() == IPv4.toIPv4Address(IP_RIP_GROUP)
+					&& ipPayload.getProtocol() == IPv4.PROTOCOL_UDP)
 			{
-				UDP udpSegment = (UDP) ipv4Data.getPayload();
-				if (udpSegment.getDestinationPort() == UDP.RIP_PORT)
+				UDP udpData = (UDP) ipPayload.getPayload();
+				if (udpData.getDestinationPort() == UDP.RIP_PORT)
 				{
-					RIPv2 potentialRip = (RIPv2) udpSegment.getPayload();
-					processRipPacket(potentialRip.getCommand(), etherPacket, inIface);
+					RIPv2 possibleRip = (RIPv2) udpData.getPayload();
+					processRipPacket(possibleRip.getCommand(), etherPacket, inIface);
 					return;
 				}
 			}
-			
+
+			// otherwise handle normal ipv4 forwarding
 			forwardIpPacket(etherPacket, inIface);
 		}
-		/********************************************************************/
 	}
 
-	private enum RipMessageType
+	// enumerates internal message types for rip
+	private enum RipMsgType
 	{
 		RIP_REQUEST,
 		RIP_RESPONSE,
-		RIP_PERIODIC
+		RIP_UNSOLICITED
 	}
 
-	// constants
-	private static final String MAC_BCAST       = "ff:ff:ff:ff:ff:ff";
-	private static final String MAC_NULL        = "00:00:00:00:00:00";
-	private static final String IP_RIP_GROUP    = "224.0.0.9";
-
-
-	private class RipRecord 
+	/**
+	 * small record class for storing rip state.
+	 */
+	private class RipRecord
 	{
 		public int address;
 		public int subnetMask;
 		public int nextHop;
 		public int metric;
-		public long lastUpdated;  // for timeouts
+		public long lastUpdate;
 
-		public RipRecord(int addr, int mask, int gw, int dist, long time)
+		public RipRecord(int addr, int mask, int gw, int dist, long timestamp)
 		{
 			this.address    = addr;
 			this.subnetMask = mask;
 			this.nextHop    = gw;
 			this.metric     = dist;
-			this.lastUpdated= time;
+			this.lastUpdate = timestamp;
 		}
 	}
 
-	// map of RIP table entries
-	private Map<Integer, RipRecord> ripEntries;
-
 	/**
-	 * initialize RIP for dynamic routing.
-	 * creates periodic tasks to send RIP updates and to expire stale entries
+	 * initializes the router's rip process to dynamically learn routes, 
+	 * sending periodic announcements and timing out stale entries.
 	 */
 	public void initRipProcess()
 	{
-		for (Iface netIf : this.interfaces.values())
+		// set up each directly-connected network
+		for (Iface iface : this.interfaces.values())
 		{
-			int netMask = netIf.getSubnetMask();
-			int ifaceNetAddr = netIf.getIpAddress() & netMask;
+			int netMask = iface.getSubnetMask();
+			int netAddr = iface.getIpAddress() & netMask;
 
-			ripEntries.put(ifaceNetAddr, new RipRecord(ifaceNetAddr, netMask, 0, 0, Long.MIN_VALUE));
-			this.routeTable.insert(ifaceNetAddr, 0, netMask, netIf);
+			// populate local rip table and route table
+			ripEntries.put(netAddr, new RipRecord(netAddr, netMask, 0, 0, Integer.MIN_VALUE));
+			routeTable.insert(netAddr, 0, netMask, iface);
 
-			// send an initial RIP request out each interface
-			emitRipPacket(RipMessageType.RIP_REQUEST, null, netIf);
+			// broadcast a rip request for each interface
+			emitRipPacket(RipMsgType.RIP_REQUEST, null, iface);
 		}
 
-		// periodically emit unsolicited RIP advertisements
-		TimerTask advTask = new TimerTask()
+		// set up periodic tasks
+		TimerTask unsolicitedTask = new TimerTask()
 		{
 			public void run()
 			{
-				for (Iface outIf : interfaces.values())
+				// send unsolicited responses every 10 seconds
+				for (Iface outFace : interfaces.values())
 				{
-					emitRipPacket(RipMessageType.RIP_PERIODIC, null, outIf);
+					emitRipPacket(RipMsgType.RIP_UNSOLICITED, null, outFace);
 				}
 			}
 		};
 
-		// timer task for expiring old entries
-		TimerTask expireTask = new TimerTask()
+		TimerTask timeoutTask = new TimerTask()
 		{
 			public void run()
 			{
+				long now = System.currentTimeMillis();
+				ArrayList<Integer> toRemove = new ArrayList<>();
+				
 				synchronized (ripEntries)
 				{
-					ArrayList<Integer> toRemove = new ArrayList<>();
-					for (Map.Entry<Integer, RipRecord> item : ripEntries.entrySet())
+					for (Map.Entry<Integer, RipRecord> e : ripEntries.entrySet())
 					{
-						RipRecord rec = item.getValue();
-						if (rec.lastUpdated >= 0 && 
-							(System.currentTimeMillis() - rec.lastUpdated) >= 30000)
+						RipRecord rec = e.getValue();
+						// if lastUpdate < 0 => it's directly connected or not yet updated
+						if (rec.lastUpdate >= 0 && (now - rec.lastUpdate) >= 30000)
 						{
 							toRemove.add(rec.address & rec.subnetMask);
 						}
 					}
-					for (Integer net : toRemove)
+					// remove timed-out entries
+					for (Integer key : toRemove)
 					{
-						RipRecord oldRec = ripEntries.remove(net);
+						RipRecord oldRec = ripEntries.remove(key);
 						if (oldRec != null)
 						{
-							thisRef.routeTable.remove(oldRec.address, oldRec.subnetMask);
+							routeTable.remove(oldRec.address, oldRec.subnetMask);
 						}
 					}
 				}
 			}
-
-			private Router thisRef = Router.this;
 		};
 
-
-		// start timers
-		Timer globalTimer = new Timer(true);
-		globalTimer.schedule(advTask, 0, 10000);     
-		globalTimer.schedule(expireTask, 0, 30000);  // check for timeouts (30 second limit)
+		Timer mainTimer = new Timer(true);
+		// unsolicited updates every 10s
+		mainTimer.schedule(unsolicitedTask, 0, 10000);
+		// check timeouts more frequently (e.g., 1s)
+		mainTimer.schedule(timeoutTask, 0, 1000);
 	}
 
 	/**
-	 * forwards a normal IP packet 
+	 * forwards a normal ipv4 packet after decrementing ttl, verifying checksum, etc.
 	 */
 	private void forwardIpPacket(Ethernet etherPacket, Iface inIface)
 	{
-		// ignore if not ipv4
 		if (etherPacket.getEtherType() != Ethernet.TYPE_IPv4)
 		{
-			return; 
+			return; // not ipv4 => drop
 		}
 
-		IPv4 ipHeader = (IPv4) etherPacket.getPayload();
-		// validate checksum
-		short origCsum = ipHeader.getChecksum();
-		ipHeader.setChecksum((short) 0);
-		byte[] serialized = ipHeader.serialize();
-		IPv4 reDeserialized = (IPv4) ipHeader.deserialize(serialized, 0, serialized.length);
-		if (origCsum != reDeserialized.getChecksum())
+		IPv4 ipHdr = (IPv4) etherPacket.getPayload();
+
+		// verify checksum
+		short origCsum = ipHdr.getChecksum();
+		ipHdr.setChecksum((short)0);
+		byte[] data = ipHdr.serialize();
+		IPv4 reloaded = (IPv4) ipHdr.deserialize(data, 0, data.length);
+		if (origCsum != reloaded.getChecksum())
 		{
-			return; // bad checksum -> drop
+			return; // checksum mismatch => drop
 		}
 
-		// decrement TTL
-		byte updatedTTL = (byte) (ipHeader.getTtl() - 1);
-		if (updatedTTL <= 0) 
+		// decrement ttl
+		byte newTtl = (byte)(ipHdr.getTtl() - 1);
+		if (newTtl <= 0)
 		{
-			return; // TTL expired -> drop
+			return; // ttl expired => drop
 		}
-		ipHeader.setTtl(updatedTTL);
+		ipHdr.setTtl(newTtl);
 
-		// recompute checksum after TTL change
-		ipHeader.setChecksum((short) 0);
-		byte[] newData = ipHeader.serialize();
-		ipHeader = (IPv4) ipHeader.deserialize(newData, 0, newData.length);
-		etherPacket.setPayload(ipHeader);
+		// recalc checksum
+		ipHdr.setChecksum((short)0);
+		byte[] updated = ipHdr.serialize();
+		ipHdr = (IPv4) ipHdr.deserialize(updated, 0, updated.length);
+		etherPacket.setPayload(ipHdr);
 
-		// check if destined for one of our interfaces -> if so, drop
+		// if destination is one of our interfaces => drop
 		for (Iface localIf : this.interfaces.values())
 		{
-			if (localIf.getIpAddress() == ipHeader.getDestinationAddress())
-			{ return; }
-		}
-
-		// look up next hop in route table
-		RouteEntry bestMatch = routeTable.lookup(ipHeader.getDestinationAddress());
-		if (bestMatch == null)
-		{
-			return; 
-		}
-
-		int gatewayAddr = bestMatch.getGatewayAddress();
-		int nextIp = (gatewayAddr != 0) ? gatewayAddr : ipHeader.getDestinationAddress();
-
-		ArpEntry foundArp = arpCache.lookup(nextIp);
-		if (foundArp == null)
-		{
-			return; 
-		}
-
-		etherPacket.setDestinationMACAddress(foundArp.getMac().toBytes());
-		etherPacket.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
-		sendPacket(etherPacket, bestMatch.getInterface());
-	}
-
-	private void emitRipPacket(RipMessageType whichType, Ethernet inbound, Iface outIface)
-	{
-		Ethernet newFrame = new Ethernet();
-		IPv4 ipSlice     = new IPv4();
-		UDP udpSlice     = new UDP();
-		RIPv2 ripPayload = new RIPv2();
-
-		newFrame.setEtherType(Ethernet.TYPE_IPv4);
-		newFrame.setSourceMACAddress(outIface.getMacAddress().toBytes());
-
-		ipSlice.setTtl((byte)64); 
-		ipSlice.setProtocol(IPv4.PROTOCOL_UDP);
-		ipSlice.setSourceAddress(outIface.getIpAddress());
-
-		udpSlice.setSourcePort(UDP.RIP_PORT);
-		udpSlice.setDestinationPort(UDP.RIP_PORT);
-
-		// decide how we fill in the destination MAC/IP based on type
-		switch (whichType)
-		{
-			case RIP_PERIODIC:
-				ripPayload.setCommand(RIPv2.COMMAND_RESPONSE);
-				newFrame.setDestinationMACAddress(MAC_BCAST);
-				ipSlice.setDestinationAddress(IPv4.toIPv4Address(IP_RIP_GROUP));
-				break;
-			case RIP_REQUEST:
-				ripPayload.setCommand(RIPv2.COMMAND_REQUEST);
-				newFrame.setDestinationMACAddress(MAC_BCAST);
-				ipSlice.setDestinationAddress(IPv4.toIPv4Address(IP_RIP_GROUP));
-				break;
-			case RIP_RESPONSE:
-				if (inbound != null)
-				{
-					IPv4 originalIp = (IPv4) inbound.getPayload();
-					ripPayload.setCommand(RIPv2.COMMAND_RESPONSE);
-					newFrame.setDestinationMACAddress(inbound.getSourceMACAddress());
-					ipSlice.setDestinationAddress(originalIp.getSourceAddress());
-				}
-				break;
-			default:
-				break;
-		}
-
-		// get curr RIP data
-		List<RIPv2Entry> aggregated = new ArrayList<>();
-		synchronized (this.ripEntries)
-		{
-			for (RipRecord r : this.ripEntries.values())
+			if (localIf.getIpAddress() == ipHdr.getDestinationAddress())
 			{
-				RIPv2Entry e = new RIPv2Entry(r.address, r.subnetMask, r.metric);
-				aggregated.add(e);
+				return; 
 			}
 		}
 
-		ripPayload.setEntries(aggregated);
-		ipSlice.setPayload(udpSlice);
-		udpSlice.setPayload(ripPayload);
-		newFrame.setPayload(ipSlice);
+		// lookup next hop
+		RouteEntry match = this.routeTable.lookup(ipHdr.getDestinationAddress());
+		if (match == null)
+		{
+			return; // no route => drop
+		}
 
-		sendPacket(newFrame, outIface);
+		int gw = match.getGatewayAddress();
+		int nextIp = (gw != 0) ? gw : ipHdr.getDestinationAddress();
+
+		// check arp cache
+		ArpEntry resolved = this.arpCache.lookup(nextIp);
+		if (resolved == null)
+		{
+			// no arp => drop (or attempt arp request, depends on assignment)
+			return;
+		}
+
+		// set mac addresses and send
+		etherPacket.setDestinationMACAddress(resolved.getMac().toBytes());
+		etherPacket.setSourceMACAddress(match.getInterface().getMacAddress().toBytes());
+		sendPacket(etherPacket, match.getInterface());
 	}
 
 	/**
-	 * processes an incoming RIP packet 
+	 * creates and sends a rip packet of a certain type on the specified interface.
 	 */
-	private void processRipPacket(byte ripCmdType, Ethernet originalFrame, Iface inPort)
+	private void emitRipPacket(RipMsgType type, Ethernet inFrame, Iface outIface)
 	{
-		switch (ripCmdType)
+		// guard against null interface
+		if (outIface == null || outIface.getMacAddress() == null)
+		{
+			return; 
+		}
+
+		Ethernet ether = new Ethernet();
+		IPv4 ipLayer = new IPv4();
+		UDP udpLayer = new UDP();
+		RIPv2 ripData = new RIPv2();
+
+		// fill in ether header
+		ether.setEtherType(Ethernet.TYPE_IPv4);
+		ether.setSourceMACAddress(outIface.getMacAddress().toBytes());
+
+		// fill in ip header
+		ipLayer.setTtl((byte)64);
+		ipLayer.setProtocol(IPv4.PROTOCOL_UDP);
+		ipLayer.setSourceAddress(outIface.getIpAddress());
+
+		// fill in udp
+		udpLayer.setSourcePort(UDP.RIP_PORT);
+		udpLayer.setDestinationPort(UDP.RIP_PORT);
+
+		// decide packet addressing depending on type
+		switch (type)
+		{
+			case RIP_UNSOLICITED:
+				// broad/multicast response
+				ripData.setCommand(RIPv2.COMMAND_RESPONSE);
+				ether.setDestinationMACAddress(MAC_BCAST);
+				ipLayer.setDestinationAddress(IPv4.toIPv4Address(IP_RIP_GROUP));
+				break;
+			case RIP_REQUEST:
+				ripData.setCommand(RIPv2.COMMAND_REQUEST);
+				ether.setDestinationMACAddress(MAC_BCAST);
+				ipLayer.setDestinationAddress(IPv4.toIPv4Address(IP_RIP_GROUP));
+				break;
+			case RIP_RESPONSE:
+				// responding directly to a request
+				if (inFrame == null)
+				{
+					// original logic never sends a response if we don't have an inbound
+					return; 
+				}
+				IPv4 inboundIp = (IPv4) inFrame.getPayload();
+				ripData.setCommand(RIPv2.COMMAND_RESPONSE);
+				ether.setDestinationMACAddress(inFrame.getSourceMACAddress());
+				ipLayer.setDestinationAddress(inboundIp.getSourceAddress());
+				break;
+			default:
+				return;
+		}
+
+		// gather current rip entries
+		List<RIPv2Entry> ripEntriesList = new ArrayList<>();
+		synchronized (ripEntries)
+		{
+			for (RipRecord record : ripEntries.values())
+			{
+				RIPv2Entry e = new RIPv2Entry(record.address, record.subnetMask, record.metric);
+				ripEntriesList.add(e);
+			}
+		}
+		ripData.setEntries(ripEntriesList);
+
+		// assemble
+		udpLayer.setPayload(ripData);
+		ipLayer.setPayload(udpLayer);
+		ether.setPayload(ipLayer);
+
+		sendPacket(ether, outIface);
+	}
+
+	/**
+	 * processes a received rip packet (request or response).
+	 */
+	private void processRipPacket(byte command, Ethernet frame, Iface inIface)
+	{
+		switch (command)
 		{
 			case RIPv2.COMMAND_REQUEST:
-				emitRipPacket(RipMessageType.RIP_RESPONSE, originalFrame, inPort);
+				// immediate response
+				emitRipPacket(RipMsgType.RIP_RESPONSE, frame, inIface);
 				break;
 			case RIPv2.COMMAND_RESPONSE:
-				IPv4 ipLayer = (IPv4) originalFrame.getPayload();
-				UDP udpPart  = (UDP) ipLayer.getPayload();
-				RIPv2 ripSeg = (RIPv2) udpPart.getPayload();
-				List<RIPv2Entry> dataList = ripSeg.getEntries();
+			{
+				IPv4 ipPortion = (IPv4) frame.getPayload();
+				UDP udpPortion = (UDP) ipPortion.getPayload();
+				RIPv2 ripBody  = (RIPv2) udpPortion.getPayload();
+				List<RIPv2Entry> entriesList = ripBody.getEntries();
 
-				for (RIPv2Entry item : dataList)
+				for (RIPv2Entry entry : entriesList)
 				{
-					int netAddr = item.getAddress();
-					int netMask = item.getSubnetMask();
-					int possibleNextHop = ipLayer.getSourceAddress();
-					int newMetric = item.getMetric() + 1;
-					if (newMetric > 16) { newMetric = 16; } // inf
+					int netAddr = entry.getAddress();
+					int netMask = entry.getSubnetMask();
+					int nextHop = ipPortion.getSourceAddress();
+					int newMetric = entry.getMetric() + 1;
+					if (newMetric > 16) newMetric = 16; // 'infinity'
 
-					int netKey = netAddr & netMask;
+					int key = netAddr & netMask;
 					
 					synchronized (ripEntries)
 					{
-						RipRecord existing = ripEntries.get(netKey);
-						if (existing != null)
+						RipRecord oldRec = ripEntries.get(key);
+						if (oldRec != null)
 						{
-							// if new distance is better or equal, update
-							if (newMetric <= existing.metric)
+							// if new metric is better or equal, update
+							if (newMetric <= oldRec.metric)
 							{
-								existing.metric = newMetric;
-								existing.lastUpdated = System.currentTimeMillis();
-								existing.nextHop = possibleNextHop;
-								routeTable.update(netAddr, netMask, possibleNextHop, inPort);
+								oldRec.metric     = newMetric;
+								oldRec.lastUpdate = System.currentTimeMillis();
+								oldRec.nextHop    = nextHop;
+								routeTable.update(netAddr, netMask, nextHop, inIface);
 							}
-							
-							// if new metric is infinite and we route out this interface, remove
+							// if 'infinite' and our route is via the same iface => remove
 							if (newMetric == 16)
 							{
 								RouteEntry current = routeTable.lookup(netAddr);
-								if (current != null && current.getInterface().equals(inPort))
+								if (current != null && current.getInterface().equals(inIface))
 								{
-									existing.metric = 16;
+									oldRec.metric = 16;
 									routeTable.remove(netAddr, netMask);
 								}
 							}
 						}
 						else
 						{
-							// insert brand-new entry if metric not infinite
-							RipRecord fresh = new RipRecord(netAddr, netMask, 
-									possibleNextHop, newMetric, System.currentTimeMillis());
-							ripEntries.put(netKey, fresh);
+							// add new route if not infinite
 							if (newMetric < 16)
 							{
-								routeTable.insert(netAddr, possibleNextHop, netMask, inPort);
+								RipRecord newRec = new RipRecord(netAddr, netMask, nextHop,
+										newMetric, System.currentTimeMillis());
+								ripEntries.put(key, newRec);
+								routeTable.insert(netAddr, nextHop, netMask, inIface);
 							}
 						}
 					}
 				}
 				break;
+			}
 			default:
 				break;
 		}
