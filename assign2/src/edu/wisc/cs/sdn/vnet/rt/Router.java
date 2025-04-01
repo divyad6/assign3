@@ -54,7 +54,7 @@ public class Router extends Device
 			etherPacket.setEtherType(Ethernet.TYPE_IPv4);
 			
 			sendRIPPacket(etherPacket, RIPv2.COMMAND_REQUEST, iface);
-			
+
             //sendRIPPacket(null, RIPv2.COMMAND_REQUEST, iface);
         }
 
@@ -270,11 +270,20 @@ public class Router extends Device
 			ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
 			ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
 		} else if ((byte)command == RIPv2.COMMAND_RESPONSE) {
-			IPv4 ipPacket = (IPv4)etherPacket.getPayload();
-			rip.setCommand(RIPv2.COMMAND_RESPONSE);
-			ether.setDestinationMACAddress(ether.getSourceMACAddress());
-			ip.setDestinationAddress(ipPacket.getSourceAddress());
+			if (etherPacket != null && etherPacket.getPayload() instanceof IPv4) {
+				// This is a direct reply to a request.
+				IPv4 ipPacket = (IPv4)etherPacket.getPayload();
+				rip.setCommand(RIPv2.COMMAND_RESPONSE);
+				ether.setDestinationMACAddress(etherPacket.getSourceMACAddress());
+				ip.setDestinationAddress(ipPacket.getSourceAddress());
+			} else {
+				// Unsolicited RIP response: broadcast it.
+				rip.setCommand(RIPv2.COMMAND_RESPONSE);
+				ether.setDestinationMACAddress("ff:ff:ff:ff:ff:ff");
+				ip.setDestinationAddress(IPv4.toIPv4Address("224.0.0.9"));
+			}
 		}
+
 
 		List<RIPv2Entry> entries = new ArrayList<RIPv2Entry>();
 		synchronized(this.ripTable)
@@ -296,8 +305,16 @@ public class Router extends Device
 
 	// broadcast RIP responses periodically
 	private void broadcastRIPResponses() {
+		if (ripTable.isEmpty()) {
+			return; // no need to send responses if there are no entries
+		}
+
         for (Iface iface : interfaces.values()) {
-            sendRIPPacket(null, RIPv2.COMMAND_RESPONSE, iface);
+            Ethernet etherPacket = new Ethernet();
+			etherPacket.setSourceMACAddress(iface.getMacAddress().toBytes());
+			etherPacket.setDestinationMACAddress("ff:ff:ff:ff:ff:ff"); // or use the RIP multicast destination if preferred
+			etherPacket.setEtherType(Ethernet.TYPE_IPv4);
+			sendRIPPacket(etherPacket, RIPv2.COMMAND_RESPONSE, iface);
         }
     }
 
