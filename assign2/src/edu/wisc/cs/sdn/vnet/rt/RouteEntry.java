@@ -21,6 +21,8 @@ public class RouteEntry
 	/** Router interface out which packets should be sent to reach
 	 * the destination or gateway */
 	private Iface iface;
+
+	public long timestamp;
 	
 	/**
 	 * Create a new route table entry.
