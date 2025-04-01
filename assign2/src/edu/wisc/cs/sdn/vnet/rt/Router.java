@@ -46,7 +46,16 @@ public class Router extends Device
             int network = iface.getIpAddress() & iface.getSubnetMask();
             ripTable.put(network, new RipEntry(network, iface.getSubnetMask(), 0, 0));
             routeTable.insert(network, 0, iface.getSubnetMask(), iface);
-            sendRIPPacket(null, RIPv2.COMMAND_REQUEST, iface);
+
+			 // Create a dummy Ethernet packet for RIP request
+			Ethernet etherPacket = new Ethernet();
+			etherPacket.setSourceMACAddress(iface.getMacAddress().toBytes());
+			etherPacket.setDestinationMACAddress("ff:ff:ff:ff:ff:ff"); // Broadcast MAC
+			etherPacket.setEtherType(Ethernet.TYPE_IPv4);
+			
+			sendRIPPacket(etherPacket, RIPv2.COMMAND_REQUEST, iface);
+			
+            //sendRIPPacket(null, RIPv2.COMMAND_REQUEST, iface);
         }
 
         Timer timer = new Timer(true);
