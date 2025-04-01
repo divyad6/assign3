@@ -10,7 +10,6 @@ import net.floodlightcontroller.packet.UDP;
 import net.floodlightcontroller.packet.RIPv2;
 import net.floodlightcontroller.packet.RIPv2Entry;
 import net.floodlightcontroller.packet.MACAddress;
-import net.floodlightcontroller.packet.ARP;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
@@ -33,15 +32,11 @@ public class Router extends Device
 	// rip table for dynamic routing
 	private Map<Integer, RipRecord> ripEntries;
 
-	// constants for rip, etc.
+	// constants 
 	private static final String MAC_BCAST    = "ff:ff:ff:ff:ff:ff";
-	private static final String MAC_ZERO     = "00:00:00:00:00:00";
 	private static final String IP_RIP_GROUP = "224.0.0.9";
 
-	/**
-	 * creates a router for a specific host.
-	 * @param host hostname for the router
-	 */
+
 	public Router(String host, DumpFile logfile)
 	{
 		super(host, logfile);
@@ -49,58 +44,13 @@ public class Router extends Device
 		this.arpCache   = new ArpCache();
 		this.ripEntries = new ConcurrentHashMap<>();
 	}
-	
-	/**
-	 * @return routing table for the router
-	 */
+
+
 	public RouteTable getRouteTable()
 	{ 
 		return this.routeTable; 
 	}
-	
-	/**
-	 * load a new routing table from a file.
-	 * @param routeTableFile the name of the file containing the routing table
-	 */
-	public void loadRouteTable(String routeTableFile)
-	{
-		if (!routeTable.load(routeTableFile, this))
-		{
-			System.err.println("Error setting up routing table from file "
-					+ routeTableFile);
-			System.exit(1);
-		}
-		
-		System.out.println("Loaded static route table");
-		System.out.println("-------------------------------------------------");
-		System.out.print(this.routeTable.toString());
-		System.out.println("-------------------------------------------------");
-	}
-	
-	/**
-	 * load a new arp cache from a file.
-	 * @param arpCacheFile the name of the file containing the arp cache
-	 */
-	public void loadArpCache(String arpCacheFile)
-	{
-		if (!arpCache.load(arpCacheFile))
-		{
-			System.err.println("Error setting up ARP cache from file "
-					+ arpCacheFile);
-			System.exit(1);
-		}
-		
-		System.out.println("Loaded static ARP cache");
-		System.out.println("----------------------------------");
-		System.out.print(this.arpCache.toString());
-		System.out.println("----------------------------------");
-	}
 
-	/**
-	 * handle an ethernet packet received on a specific interface.
-	 * @param etherPacket the ethernet packet that was received
-	 * @param inIface the interface on which the packet was received
-	 */
 	public void handlePacket(Ethernet etherPacket, Iface inIface)
 	{
 		System.out.println("*** -> Received packet: " +
@@ -132,7 +82,6 @@ public class Router extends Device
 		}
 	}
 
-	// enumerated rip message types
 	private enum RipMsgType
 	{
 		RIP_REQUEST,
@@ -221,8 +170,8 @@ public class Router extends Device
 		Timer mainTimer = new Timer(true);
 		// send unsolicited every 10 sec
 		mainTimer.schedule(periodicTask, 0, 10000);
-		// check expired entries more frequently
-		mainTimer.schedule(cleanupTask, 0, 1000);
+		// check expired entries every 30 sec
+		mainTimer.schedule(cleanupTask, 0, 30000);
 	}
 
 	/**
@@ -244,14 +193,14 @@ public class Router extends Device
 		IPv4 reloaded = (IPv4) ipHdr.deserialize(rawData, 0, rawData.length);
 		if (origSum != reloaded.getChecksum())
 		{
-			return; // bad checksum => drop
+			return; 
 		}
 
 		// decrement ttl
 		byte newTtl = (byte)(ipHdr.getTtl() - 1);
 		if (newTtl <= 0)
 		{
-			return; // drop
+			return; 
 		}
 		ipHdr.setTtl(newTtl);
 		ipHdr.setChecksum((short)0);
@@ -260,7 +209,7 @@ public class Router extends Device
 		ipHdr = (IPv4) ipHdr.deserialize(up, 0, up.length);
 		etherPacket.setPayload(ipHdr);
 
-		// if dest is one of our interfaces => drop
+		// if dest is one of our interfaces -> drop
 		for (Iface localIf : this.interfaces.values())
 		{
 			if (localIf.getIpAddress() == ipHdr.getDestinationAddress())
@@ -283,27 +232,23 @@ public class Router extends Device
 		ArpEntry resolved = this.arpCache.lookup(nextIp);
 		if (resolved == null)
 		{
-			// no entry => drop or queue for arp request (depends on assignment)
 			return;
 		}
 		MACAddress resolvedMac = resolved.getMac();
 		Iface outIface = bestMatch.getInterface();
 
-		// additional null checks for safety
 		if (resolvedMac == null || outIface == null || outIface.getMacAddress() == null)
 		{
 			return; 
 		}
 
-		// set addresses
 		etherPacket.setDestinationMACAddress(resolvedMac.toBytes());
 		etherPacket.setSourceMACAddress(outIface.getMacAddress().toBytes());
 		sendPacket(etherPacket, outIface);
 	}
 
-	/**
-	 * creates and transmits a rip packet of the specified type.
-	 */
+
+
 	private void emitRipPacket(RipMsgType type, Ethernet inbound, Iface outIface)
 	{
 		// avoid null pointers
@@ -374,7 +319,7 @@ public class Router extends Device
 	}
 
 	/**
-	 * processes an incoming rip packet (request or response).
+	 * processes an incoming rip packet
 	 */
 	private void processRipPacket(byte command, Ethernet inFrame, Iface inIface)
 	{
