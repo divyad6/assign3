@@ -51,6 +51,37 @@ public class Router extends Device
 		return this.routeTable; 
 	}
 
+	public void loadRouteTable(String routeTableFile)
+	{
+		if (!this.routeTable.load(routeTableFile, this))
+		{
+			System.err.println("Error setting up routing table from file "
+					+ routeTableFile);
+			System.exit(1);
+		}
+		
+		System.out.println("Loaded static route table");
+		System.out.println("-------------------------------------------------");
+		System.out.print(this.routeTable.toString());
+		System.out.println("-------------------------------------------------");
+	}
+	
+
+	public void loadArpCache(String arpCacheFile)
+	{
+		if (!this.arpCache.load(arpCacheFile))
+		{
+			System.err.println("Error setting up ARP cache from file "
+					+ arpCacheFile);
+			System.exit(1);
+		}
+		
+		System.out.println("Loaded static ARP cache");
+		System.out.println("----------------------------------");
+		System.out.print(this.arpCache.toString());
+		System.out.println("----------------------------------");
+	}
+
 	public void handlePacket(Ethernet etherPacket, Iface inIface)
 	{
 		System.out.println("*** -> Received packet: " +
