@@ -80,7 +80,8 @@ public class Router extends Device
                 RipEntry existing = ripTable.get(network);
                 if (existing == null || newMetric < existing.metric) {
                     ripTable.put(network, new RipEntry(entry.getAddress(), entry.getSubnetMask(), sourceIP, newMetric));
-                    routeTable.insert(entry.getAddress(), sourceIP, entry.getSubnetMask(), inIface);
+                    // routeTable.insert(entry.getAddress(), sourceIP, entry.getSubnetMask(), inIface);
+					routeTable.insert(network, sourceIP, entry.getSubnetMask(), inIface);
                 }
             }
         }
