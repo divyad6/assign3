@@ -90,7 +90,7 @@ public class Main
 			{ ((Router)dev).loadRouteTable(routeTableFile); }
 			else{
 				//Initialize RIP if a static route table isn't provided
-				((Router)dev).RIPInitialize();;
+				((Router)dev).initRipProcess();;
 			}
 
 			// Read static ACP cache
